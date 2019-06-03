@@ -1,0 +1,132 @@
+CSE 506: Operating Systems
+Spring 2019
+Homework 1
+
+ReadMe Document
+Author: Kaustav Sarkar
+SBU ID:112505000
+
+
+This ReadMe file contains the usage information of the cpenc system call. The project folder primarily consists of the following files and are required for the successful working of the cpenc system call:
+
+1. Makefile
+
+This file contains the build and clean commands for the userland program and system call. I have made changes in this makefile to enable compilation for tcpenc.c instead of xhw1.c and also appended -lssl -lcrypto to support openssl encryption for generating MD5 hash.
+
+
+2. install_module.sh
+
+This is a shell script used to insert and remove the loadable module from the kernel.
+
+
+3. kernel.config
+
+This is the .config file which I used to load the minimal components of kernel, without corrupting the normal working of the kernel. The count of configuration parameters is 1073, including kernel hacking.
+
+4. ReadMe
+
+This file, which contains the usage information of the system call and any other information, like sources and references.
+
+5. sys_cpenc.c
+
+sys_cpenc.c is the C program file which links to system call by a function pointer. It takes the following arguments from userland in a void *.
+a. input file (infile)
+b. output file (outfile)
+c. flag (flag)
+d. key buffer (keybuf)
+e. key length (keylen)
+
+After receving the argument from the user, it is first validated to check the authencity by checking whether it is NULL or not. Then, the access_ok function checks its pointer validity. Once the arguments are validated successfully,memory is allocated for these arguments by using kmalloc and then these userland arguments are copied to kernel space by invoking copy_from_user. If all data is successfully transferred, it returns 0 or else an appopriate error is returned. 
+
+After the validation and copying data, it performs important checks like whether appropriate flags are passed (1 for encrypt,2 for decrypt and 4 for copy) and whether the input file name and output file name is passed or not. Then the getname function is called for both the input file and output file, which allocates memory and also perform checks like the maximum permissible path of the files.
+
+Then the read buffer is allocated and memset is used.
+
+After that, the input file is opened filp_open and file checks are performed like whether the file has been successfully opened or not and whether the file is a regular file or not.
+
+Like the input file, the output file is opened with filp_open and file checks are performed like whether the file has been successfully opened or not and whether the file is a regular file or not. Also, it is checked whether both the input and output files are on the same partition and whether their inode numbers are same or not.
+
+Then memory is allocated for the Temporary File by kmalloc and its name is given which is <output file name>.tmp.After that the temporary file is opened and the same checks are performed on this file, like the input and output file.
+
+After the check, the file permissions of the temporary file are set, same as that of the input file. Also,its dentrys and offsets are set.
+
+Now, depending on the flag, the operations are performed. Encryption is performed if flag is 1,Decryption is performed if flag is 2 and Copy is performed if flag is 4.
+
+Another point of importance is that the MD5 hashed key from the userland is again MD5 Hashed, to check for its correctness, that is during decryption, whether the user is providing the correct password or not.
+
+For Encryption, first the preamble(which is the MD5 hash of the already MD5 Hashed Key from the Userland) is written and then the content from the input file is read into the read buffer by the vfs_read function.Then this read buffer is passed along with the encrypt flag to the function sys_enc_dec, which initializes and triggers the cipher operation. This function sets the mode of encryption to the CTR mode of AES, and also sets the key along with the Initialization Vector(IV). The sys_enc_dec function further calls the skcipher_encdec function which performs the cipher operation.
+
+For Decryption, first the preamble is read and then checked for its correctness with the help of memcmp function,and if the password is correct, only then it is further read by the vfs_read function.Then this read buffer is passed along with the decrypt flag to the function sys_enc_dec, which initializes and triggers the cipher operation. This function sets the mode of decryption to the CTR mode of AES, and also sets the key along with the Initialization Vector(IV). The sys_enc_dec function further calls the skcipher_encdec function which performs the cipher operation.
+
+
+For Copy, no such operations are performed.
+
+Now, the encrypted/decrypted/original content is there to be written and hence the write happens with the help of the vfs_write function.
+
+After that, the temporary file is renamed to the output file name by the vfs_rename function.
+
+Also, in any case of failure or partial write, the temporary file is deleted with the vfs_unlink function.
+
+Finally, all the files are closed with the help of filp_close and memory is freed with kfree as well as putname.
+
+The system call returns appropriate errno on failure and returns 0 on success.
+
+
+
+6. tcpenc.c
+
+This is the userland program that invokes the system call with the parameters passed by the user. The usage of this program is as follows:
+
+Usage: ./xcpenc {-p PASSWORD} {-e|-d|-c} [-h HELP] infile outfile
+
+This program allocates memory and takes the user inputs using getopt. Furthermore,this program performs a variety of checks like whether whether the password is NULL or not, password is less than 6 characters or not, missing -e,-d,-c flags, missing input file and output file by invoking the check_func function. It also removes any new line from the password by invoking the rm_new_line function. It prints the Help Document when the user asks for it. Also it performs the MD5 Hashing of the password by calling the MD5 function. Finally, it packs all the arguments and passes to the system call, sys_cpenc.
+
+
+7. sys_cpenc.h
+
+This file contains the struct of all the variables required by user. It is shared by both user and kernel space. It contains the following variables:
+
+a. input file (infile)
+b. output file (outfile)
+c. flag (flag)
+d. key buffer (keybuf)
+e. key length (keylen)
+
+
+8.  Test Scripts
+
+10 Test Shell Scripts performing different checks. Its named from test01.sh to test10.sh .
+
+9. xcpenc
+
+xcpenc is the executable generated from the tcpenc program.
+
+
+References:
+
+1.https://www.gnu.org/software/libc/manual/html_node/Example-of-Getopt.html
+2.https://www.openssl.org/docs/man1.1.0/man3/PKCS5_PBKDF2_HMAC_SHA1.html
+3.https://www.techonthenet.com/c_language/standard_library_functions/string_h/memcpy.php
+4.https://kernel.readthedocs.io/en/sphinx-samples/crypto-API.html#code-examples
+5.https://kernel.readthedocs.io/en/sphinx-samples/crypto-API.html
+6.https://www.spinics.net/lists/newbies/msg28801.html
+7.https://static.lwn.net/images/pdf/LDD3/ch08.pdf
+8.https://www.fsl.cs.sunysb.edu/kernel-api/re257.html
+9.https://www.cs.bham.ac.uk/~exr/lectures/opsys/14_15/docs/kernelAPI/r3725.html
+10.https://www.tldp.org/LDP/tlk/ds/ds.html
+11.https://stackoverflow.com/questions/40163270/what-is-s-isreg-and-what-does-it-do
+12.https://geeksww.com/tutorials/operating_systems/linux/tips_and_tricks/some_tricks_used_by_the_linux_kernel.php
+13.https://www.kernel.org/
+14.https://bootlin.com/
+
+I have used kernel.org example codes to implement my encryption and decryption mechanisms and provided the source links in comments for the websites from which I have taken the code and modified according to my requirements.
+
+
+
+
+
+
+
+
+
+
