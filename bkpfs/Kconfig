@@ -1,6 +1,0 @@
-config BKP_FS
-	tristate "Bkpfs stackable file system (EXPERIMENTAL)"
-	help
-	  Bkpfs is a stackable file system which automatically creates backup
-	  versions of files, and also allows you to view versions as well as recover
-	  them.
