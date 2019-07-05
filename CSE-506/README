@@ -1,0 +1,217 @@
+						CSE 506 Spring 2019 Homework 2
+						Name: Kaustav Sarkar
+						SBU ID:112505000
+
+* INTRODUCTION *
+================
+
+In this homework, I have implemented the "BKPFS" stackable file system, based on WrapFS. I have modified the WrapFS stackable file
+system, to create automatic backups or versions of files. Furthermore, the user is presented with a host of features, enabling them
+to view,delete,restore and list the versions associated with a particular file. This will hence give the power of being able to 
+recover lost or inadvertent changes, to the user.
+
+* BUILD AND INSTALL *
+======================
+The BKPFS file system is built as module. Thee following changes are
+done to install the module.
+1. The magic number is added in include/uapi/linux/magic.h file 
+	#define BKPFS_SUPER_MAGIC     	0xb550ca15
+
+2.Added entry in Makefile and Kconfig of 'fs' folder. 
+
+3.install_module.sh script file :I have made a script which installs 
+and mounts the BKPFS filesystem at /mnt/bkpfs. The file is kept at 
+/usr/src/hw2-ksarkar/CSE-506.
+
+4.To build the user code we need to first go to /usr/src/hw2-ksarkar/CSE-506 directory
+Then run
+gcc bkpctl.c -o bkpctl
+or run the make in that directory.
+
+This will generate the output file "bkpctl" which will be used to send IOCTL's to the kernel.
+
+5.Also a C program is given, which writes "hello world" to a file in the /mnt/bkpfs directory.
+This can be done by running
+gcc write.c
+and then
+./a.out
+
+* DESIGN AND IMPLEMENTATION *
+=============================
+Following features are supported for BKPFS Stackable FileSystem.
+
+A. MOUNTING:
+------------------
+Mounting bkpfs can be done as follows:
+
+# mount -t bkpfs /some/lower/path /mnt/bkpfs
+
+Mount Option to take the maximum number of versions is not supported.
+
+
+B. BACKUPS:
+------------
+
+When?
+
+Backups are created when a user tries to write to a file or opens a file for writing. BKPFS will create a backup file irrespective 
+of whether the user has actually written or made changes to the file or not.
+
+Naming:
+
+The Backup files are stored in the following format:
+.FILENAME.VN
+where FILENAME is the name of the file and N is an integer which corresponds to the version number.
+
+Number of Versions:
+
+The BKPFS supports maximum of 10 versions or backups per file. This is hardcoded into the system.
+
+Visibility Policy:
+
+All backup files are hidden to the user. This is to prevent users from getting confused while they do a /bin/ls, as without this
+it will potentially show a lot of extra backup files.
+This is achieved by a modified flavor of readdir and filldir. This implementation is inspired by the one used in eCryptfs.
+
+Retention Policy:
+
+The BKPFS Stackable FileSystem supports 10 backups per file. Once, this threshold is reached, it will not add more versions, instead
+will overwrite to the oldest version. This is done with the help of extended attributes, more explicitly mentioned in the next
+section.
+
+
+C. USAGE OF IOCTLS AND EXTENDED ATTRIBUTES:
+-------------------------------------------
+
+IOCTLS:
+
+There are four IOCTLS, defined in bkpctl.h header file, which are used to support the Version Management System:
+
+1. BKPFS_LIST_VERSIONS -> To list all the backup versions associated with a particular file
+2. BKPFS_REMOVE_VERSIONS -> To remove a backup version, depending on the argument passed by the user
+3. BKPFS_VIEW_VERSION -> To view the content of a backup file, depending on the argument passed by the user
+4. BKPFS_RESTORE_VERSION -> To restore a file or revert back its state, depending on the version selected by the user
+
+EXTENDED ATTRIBUTES:
+
+The extended attributes associated with a dentry is a key-value pair. I have used two extended attributes in my BKPFS file system.
+
+1. BKPFS_XATTR_FILE_VERSION -> This extended attribute stores the version number of the backup file being created. This is primarily
+used to keep a track of the latest version. They key associated with this EA is user.latestversion, which has the latest backup
+version of the file.
+
+2. BKPFS_XATTR_RR_STATUS -> This extended attribute stores the Round Robin status of a particular file, represented by the
+user.rrstatus key. The Round Robin mechanism is used to rewrite the oldest backup files, once the threshold is reached, that is
+10 backup files are created. This implies that once all backup versions are created that is from 1 to 10, the file system will
+write the latest changes into the oldest file, like 1 in this case, instead of creating a new backup file. When a full circle is
+reached, that is all 10 backup files are created, the user.rrstatus key is set to 1.
+
+
+D. VERSION MANAGEMENT:
+----------------------
+
+1. LIST VERSIONS OF A FILE -> This feature is used to list all the versions of a file, that is, it is a list of all the backup
+files associated with a particular original file. For this, I have implemented a for loop which first generates the name of a
+backup file in an iterative way and then using that, does a d_lookup to check whether the backup file is present or not. If it is
+present, then it is stored in a character buffer. This character buffer is then returned to the userland.
+
+2. REMOVE VERSIONS OF A FILE -> This feature is used to remove/delete a version of file, according to the argument passed by the
+user. The arguments can be either "newest","oldest" or "all". For "all" argument, that is when the user asks to delete all backup
+versions of a file, I have written a function, all_ver_rmv()  which again uses a for loop to do d_lookups to check if that version
+is present and if it is present, deletes it by calling vfs_unlink(). In case of oldest, I have written another function 
+_get_oldest_version(), which uses extended attributes to check for the round robin status of a file, and accordingly determines
+the oldest version by checking the current version. Similarly, for the newest version, it is already stored in the extended
+attribute. Once the backup file to be removed is determined, the remove_other_versions function is called, which removes the
+appropriate version, by calling vfs_unlink().
+
+3. VIEW CONTENTS OF VERSIONS -> This feature is used to view the content of a version/backup file. This is important if the user
+wants to view a version backup file before, let's say restoring.The arguments can be either "newest","oldest" or "N", 
+where "N" corresponds to the backup/version file number. In case of oldest, the _get_oldest_version() is called, which uses extended 
+attributes to check for the round robin status of a file, and accordingly determines the oldest version by checking the current 
+version. Similarly, for the newest version, it is already stored in the extended attribute.This is done by calling the 
+view_versions(), which uses the vfs_read() to read the backup file and then using copy_to_user to send the buffer back to the 
+userland. 
+
+4. RESTORE VERSION OF A FILE -> This feature is used to restore the contents of a desired backup file to the original file. The
+arguments can be either "newest","oldest" or "N", where "N" corresponds to the backup/version file number. In case of oldest, the 
+_get_oldest_version() is called, which uses extended attributes to check for the round robin status of a file, and accordingly 
+determines the oldest version by checking the current version. Similarly, for the newest version, it is already stored in the 
+extended attribute. Once the backup file to be restored is determined, the restore_versions function is called, which restores the
+appropriate version to the original file. This is done by using vfs_read() to read the backup file and then using vfs_write to
+write to the original file.
+
+
+E. FILES SUBMITTED:
+-------------------
+
+BKPS FileSystem Files -> These files are found in /usr/src/hw2-ksarkar/fs/bkpfs directory. Some of the main files in the directory:
+
+1. dentry.c
+2. file.c
+3. inode.c
+4. lookup.c
+5. main.c
+6. mmap.c
+7. super.c
+8. bkpctl.h
+9. Kconfig
+10. Makefile
+11. kernel.config
+
+
+Userland Files -> These files are found in /usr/src/hw2-ksarkar/CSE-506 directory. The files in the directory:
+
+1. bkpctl.c - This is the user level program that calls the IOCTLS used in Version Management.
+2. bkpctl.h - The common header file mainly containing the IOCTL definitions.
+3. README - User Manual
+4. install_module.sh - Shell script which installs and mounts the BKPFS filesystem at /mnt/bkpfs.
+5. Test Scripts - Named from test01.sh to test10.sh, these test various functionalities of the FileSystem.
+6. Makefile - Used to compile user-level program, bkpctl.c.
+
+
+F. TEST SCRIPTS:
+-------------------
+1. test01.sh -> test list version functionality
+2. test02.sh -> test delete version functionality with version number passed
+3. test03.sh -> test delete version functionality with newest passed
+4. test04.sh -> test delete version functionality with oldest passed
+5. test05.sh -> test delete version functionality with all passed
+6. test06.sh -> test restore version functionality with version number passed
+7. test07.sh -> test restore version functionality with newest passed
+8. test08.sh -> test restore version functionality with oldest passed
+9. test09.sh -> test view version functionality with oldest passed
+10. test10.sh -> test view version functionality with newest passed
+11. test11.sh -> test view version functionality with version number passed
+12. test12.sh -> test whether backup files are hidden or not
+13. test13.sh -> test less arguments passed from user level
+14. test14.sh -> test more arguments passed from user level
+15. test15.sh -> test multiple options passed from user level
+
+Assumptions made for testing the scripts:
+------------------------------------------
+
+1. The BKPFS File System is mounted in /mnt/bkpfs.
+2. The make command is run in the /usr/src/hw2-ksarkar/fs/bkpfs.
+3. The module bkpfs.ko is insmod before mounting.
+
+
+* LIMITATIONS/FUTURE DEVELOPMENT:*
+==================================
+
+1. The view version works for only maximum size of page size, that is, larger files can't be viewed.
+2. Currently, the number of versions associated with a particular file is limited to 10, and is not configurable by the user.
+3. When the user deletes the original file, the backup files still remains and are not deleted.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
